@@ -170,12 +170,14 @@ runcmd:
     if blkid "$DATA_DISK" | grep -q "TYPE="; then
       log "Disk already formatted, mounting existing filesystem"
       EXISTING_FS=$(blkid -o value -s TYPE "$DATA_DISK")
+      DISK_UUID=$(blkid -o value -s UUID "$DATA_DISK")
       log "Existing filesystem type: $EXISTING_FS"
+      log "Disk UUID: $DISK_UUID"
 
-      # Add to fstab if not already present
-      if ! grep -q "$DATA_DISK" /etc/fstab; then
-        echo "$DATA_DISK $MOUNT_POINT $EXISTING_FS defaults,nofail 0 2" >> /etc/fstab
-        log "Added to fstab"
+      # Add to fstab using UUID if not already present
+      if ! grep -q "$MOUNT_POINT" /etc/fstab; then
+        echo "UUID=$DISK_UUID $MOUNT_POINT $EXISTING_FS defaults,nofail 0 2" >> /etc/fstab
+        log "Added to fstab using UUID"
       fi
 
       mount -a
@@ -209,9 +211,17 @@ runcmd:
       log "Formatting partition as ext4..."
       mkfs.ext4 -F "$PARTITION"
 
-      # Add to fstab
-      echo "$PARTITION $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
-      log "Added to fstab"
+      # Wait for filesystem to be recognized and get UUID
+      sleep 2
+      partprobe "$PARTITION"
+      sleep 1
+
+      PARTITION_UUID=$(blkid -o value -s UUID "$PARTITION")
+      log "Partition UUID: $PARTITION_UUID"
+
+      # Add to fstab using UUID
+      echo "UUID=$PARTITION_UUID $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
+      log "Added to fstab using UUID"
 
       # Mount the filesystem
       mount -a
