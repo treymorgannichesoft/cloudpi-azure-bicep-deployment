@@ -425,6 +425,117 @@ if [ "$DEPLOY_STATUS" = "Succeeded" ]; then
     echo "  4. See DEPLOYMENT.md for detailed next steps"
     echo ""
 
+    # ============================================================================
+    # Post-Deployment Health Check
+    # ============================================================================
+
+    if [ "$ADD_PUBLIC_IP" = "true" ]; then
+        echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║              Running Deployment Health Check                   ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${CYAN}Waiting for cloud-init to complete...${NC}"
+        echo "This may take 3-5 minutes for Docker and Azure CLI installation..."
+        echo ""
+
+        # Wait for SSH to be available first
+        SSH_READY=false
+        MAX_SSH_WAIT=120  # 2 minutes for SSH
+        SSH_ELAPSED=0
+        echo -n "Waiting for SSH"
+        while [ $SSH_ELAPSED -lt $MAX_SSH_WAIT ]; do
+            if ssh -i ~/.ssh/${PROJECT_NAME}_azure \
+                   -o StrictHostKeyChecking=no \
+                   -o ConnectTimeout=5 \
+                   -o BatchMode=yes \
+                   azureadmin@$PUBLIC_IP 'exit' &> /dev/null; then
+                SSH_READY=true
+                break
+            fi
+            sleep 5
+            SSH_ELAPSED=$((SSH_ELAPSED + 5))
+            echo -n "."
+        done
+        echo ""
+
+        if [ "$SSH_READY" = "true" ]; then
+            echo -e "${GREEN}✓ SSH connection established${NC}"
+            echo ""
+
+            # Wait for cloud-init to finish
+            echo -n "Waiting for cloud-init to complete"
+            MAX_WAIT=480  # 8 minutes for cloud-init
+            ELAPSED=0
+            CLOUD_INIT_DONE=false
+
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+                # Check cloud-init status
+                if ssh -i ~/.ssh/${PROJECT_NAME}_azure \
+                       -o StrictHostKeyChecking=no \
+                       -o ConnectTimeout=10 \
+                       azureadmin@$PUBLIC_IP \
+                       'cloud-init status 2>/dev/null | grep -q "status: done"' 2>/dev/null; then
+                    CLOUD_INIT_DONE=true
+                    break
+                fi
+                sleep 10
+                ELAPSED=$((ELAPSED + 10))
+                echo -n "."
+            done
+            echo ""
+
+            if [ "$CLOUD_INIT_DONE" = "true" ]; then
+                echo -e "${GREEN}✓ cloud-init completed${NC}"
+                echo ""
+
+                # Display health check results
+                echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+                echo -e "${BLUE}║            Deployment Health Check Results                     ║${NC}"
+                echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+                echo ""
+
+                # Fetch and display the health check log
+                if ssh -i ~/.ssh/${PROJECT_NAME}_azure \
+                       -o StrictHostKeyChecking=no \
+                       azureadmin@$PUBLIC_IP \
+                       'cat /var/log/cloudpi-deployment-health.log' 2>/dev/null; then
+                    echo ""
+                else
+                    echo -e "${YELLOW}⚠️  Health check log not available yet${NC}"
+                    echo "You can check it manually with:"
+                    echo "  ssh -i ~/.ssh/${PROJECT_NAME}_azure azureadmin@$PUBLIC_IP 'cat /var/log/cloudpi-deployment-health.log'"
+                    echo ""
+                fi
+            else
+                echo -e "${YELLOW}⚠️  cloud-init still running (timeout after ${MAX_WAIT}s)${NC}"
+                echo ""
+                echo "Your VM is deployed but cloud-init is still configuring."
+                echo "You can check cloud-init status with:"
+                echo "  ssh -i ~/.ssh/${PROJECT_NAME}_azure azureadmin@$PUBLIC_IP 'cloud-init status --wait'"
+                echo ""
+                echo "Once complete, view the health check:"
+                echo "  ssh -i ~/.ssh/${PROJECT_NAME}_azure azureadmin@$PUBLIC_IP 'cat /var/log/cloudpi-deployment-health.log'"
+                echo ""
+            fi
+        else
+            echo -e "${YELLOW}⚠️  Could not establish SSH connection${NC}"
+            echo ""
+            echo "Your VM is deployed but SSH is not responding yet."
+            echo "Wait a few minutes and connect manually:"
+            echo "  ssh -i ~/.ssh/${PROJECT_NAME}_azure azureadmin@$PUBLIC_IP"
+            echo ""
+            echo "Then view the health check:"
+            echo "  cat /var/log/cloudpi-deployment-health.log"
+            echo ""
+        fi
+    else
+        echo -e "${CYAN}No public IP configured - Health check available via:${NC}"
+        echo "  1. Connect via Azure Bastion or VPN"
+        echo "  2. SSH to private IP: $VM_PRIVATE_IP"
+        echo "  3. Run: cat /var/log/cloudpi-deployment-health.log"
+        echo ""
+    fi
+
 else
     echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║                    Deployment Failed!                          ║${NC}"

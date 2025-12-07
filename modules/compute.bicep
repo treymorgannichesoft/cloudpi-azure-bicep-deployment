@@ -44,6 +44,9 @@ param logAnalyticsWorkspaceId string
 @description('Recovery Services Vault name (if backup is enabled)')
 param recoveryServicesVaultName string
 
+@description('Key Vault name for secrets access')
+param keyVaultName string
+
 @description('Enable backup')
 param enableBackup bool
 
@@ -292,10 +295,163 @@ runcmd:
 
   # Install Azure CLI (for potential management tasks)
   - curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+  # Post-deployment validation and health check
+  - |
+    HEALTH_LOG="/var/log/cloudpi-deployment-health.log"
+    ADMIN_USER="{{ADMIN_USERNAME}}"
+    KEY_VAULT_NAME="{{KEY_VAULT_NAME}}"
+
+    # Run health check and tee output to log file (sh-compatible syntax)
+    {
+      ERRORS=0
+
+      echo "========================================"
+      echo "CloudPi Deployment Health Check"
+      echo "========================================"
+      echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+      echo "Hostname: $(hostname)"
+      echo ""
+
+      # Check 1: Docker Installation
+      echo "[1/10] Checking Docker installation..."
+      if command -v docker >/dev/null 2>&1; then
+        DOCKER_VERSION=$(docker --version)
+        echo "  ✅ Docker installed: $DOCKER_VERSION"
+      else
+        echo "  ❌ ERROR: Docker not installed"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 2: Docker Running
+      echo "[2/10] Checking Docker service..."
+      if systemctl is-active --quiet docker; then
+        echo "  ✅ Docker service is running"
+      else
+        echo "  ❌ ERROR: Docker service not running"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 3: Docker Data Root
+      echo "[3/10] Checking Docker data-root..."
+      DOCKER_ROOT=$(docker info 2>/dev/null | grep "Docker Root Dir" | awk '{print $4}')
+      if [ "$DOCKER_ROOT" = "/mnt/cloudpi-data/docker" ]; then
+        echo "  ✅ Docker using data disk: $DOCKER_ROOT"
+      else
+        echo "  ❌ ERROR: Docker not using data disk (current: $DOCKER_ROOT)"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 4: Data Disk Mount
+      echo "[4/10] Checking data disk mount..."
+      if mountpoint -q /mnt/cloudpi-data; then
+        DISK_SIZE=$(df -h /mnt/cloudpi-data | tail -1 | awk '{print $2}')
+        DISK_AVAIL=$(df -h /mnt/cloudpi-data | tail -1 | awk '{print $4}')
+        echo "  ✅ Data disk mounted: $DISK_SIZE total, $DISK_AVAIL available"
+      else
+        echo "  ❌ ERROR: Data disk not mounted at /mnt/cloudpi-data"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 5: systemd Mount Unit
+      echo "[5/10] Checking systemd mount unit..."
+      if systemctl is-enabled --quiet mnt-cloudpi\\x2ddata.mount 2>/dev/null; then
+        echo "  ✅ systemd mount unit enabled (will auto-mount on reboot)"
+      else
+        echo "  ❌ ERROR: systemd mount unit not enabled"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 6: Azure CLI
+      echo "[6/10] Checking Azure CLI..."
+      if command -v az >/dev/null 2>&1; then
+        AZ_VERSION=$(az --version 2>&1 | head -1)
+        echo "  ✅ Azure CLI installed: $AZ_VERSION"
+      else
+        echo "  ❌ ERROR: Azure CLI not installed"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 7: Directories
+      echo "[7/10] Checking CloudPi directories..."
+      DIRS_OK=true
+      for dir in mysql app logs backups docker; do
+        if [ -d "/mnt/cloudpi-data/$dir" ]; then
+          OWNER=$(stat -c "%U:%G" "/mnt/cloudpi-data/$dir" 2>/dev/null)
+          if [ "$dir" = "docker" ]; then
+            echo "  ✅ /mnt/cloudpi-data/$dir exists (owner: $OWNER)"
+          elif [ "$OWNER" = "$ADMIN_USER:$ADMIN_USER" ]; then
+            echo "  ✅ /mnt/cloudpi-data/$dir exists (owner: $OWNER)"
+          else
+            echo "  ⚠️  WARNING: /mnt/cloudpi-data/$dir has incorrect owner: $OWNER (expected: $ADMIN_USER:$ADMIN_USER)"
+            DIRS_OK=false
+          fi
+        else
+          echo "  ❌ ERROR: /mnt/cloudpi-data/$dir missing"
+          ERRORS=$((ERRORS + 1))
+          DIRS_OK=false
+        fi
+      done
+
+      # Check 8: Managed Identity
+      echo "[8/10] Checking managed identity..."
+      if az login --identity --allow-no-subscriptions >/dev/null 2>&1; then
+        echo "  ✅ Managed identity authentication successful"
+      else
+        echo "  ❌ ERROR: Managed identity authentication failed"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check 9: Key Vault Access
+      echo "[9/10] Checking Key Vault access..."
+      if [ -n "$KEY_VAULT_NAME" ]; then
+        if az keyvault secret list --vault-name "$KEY_VAULT_NAME" >/dev/null 2>&1; then
+          echo "  ✅ Key Vault accessible: $KEY_VAULT_NAME"
+        else
+          echo "  ⚠️  WARNING: Cannot access Key Vault: $KEY_VAULT_NAME"
+          echo "      (This is expected if no secrets exist yet)"
+        fi
+      else
+        echo "  ⚠️  WARNING: Key Vault name not provided to health check"
+      fi
+
+      # Check 10: Disk Space
+      echo "[10/10] Checking disk space..."
+      DATA_DISK_USAGE=$(df -h /mnt/cloudpi-data | tail -1 | awk '{print $5}' | sed 's/%//')
+      if [ "$DATA_DISK_USAGE" -lt 10 ]; then
+        echo "  ✅ Data disk usage: ${DATA_DISK_USAGE}%"
+      else
+        echo "  ⚠️  WARNING: Data disk usage high: ${DATA_DISK_USAGE}%"
+      fi
+
+      echo ""
+      echo "========================================"
+      echo "Health Check Summary"
+      echo "========================================"
+      if [ $ERRORS -eq 0 ]; then
+        echo "✅ ALL CHECKS PASSED - Deployment Successful!"
+        echo ""
+        echo "Your CloudPi VM is ready to use."
+        echo "You can now run: docker compose up -d"
+      else
+        echo "❌ DEPLOYMENT ISSUES DETECTED: $ERRORS error(s) found"
+        echo ""
+        echo "Please review the errors above and check:"
+        echo "  - /var/log/cloud-init-output.log"
+        echo "  - /var/log/cloudpi-disk-setup.log"
+        echo "  - /var/log/cloudpi-deployment-health.log (this file)"
+      fi
+      echo "========================================"
+      echo ""
+    } | tee "$HEALTH_LOG"
+
+    # Make log readable by admin user
+    chmod 644 "$HEALTH_LOG"
 '''
 
-// Replace placeholder with actual admin username and encode
-var cloudInitWithVars = replace(cloudInitTemplate, '{{ADMIN_USERNAME}}', adminUsername)
+// Replace placeholders with actual values and encode
+var cloudInitWithUsername = replace(cloudInitTemplate, '{{ADMIN_USERNAME}}', adminUsername)
+var cloudInitWithVars = replace(cloudInitWithUsername, '{{KEY_VAULT_NAME}}', keyVaultName)
 var cloudInit = base64(cloudInitWithVars)
 
 // ============================================================================

@@ -224,6 +224,7 @@ module compute 'modules/compute.bicep' = {
     nsgId: networking.outputs.nsgId
     logAnalyticsWorkspaceId: monitoring.outputs.logAnalyticsWorkspaceId
     recoveryServicesVaultName: enableBackup ? monitoring.outputs.recoveryServicesVaultName : ''
+    keyVaultName: security.outputs.keyVaultName
     enableBackup: enableBackup
     enableAutoShutdown: enableAutoShutdown
     autoShutdownTime: autoShutdownTime
