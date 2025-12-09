@@ -480,9 +480,11 @@ Expected output:
 └── docker/     # Docker data-root
 ```
 
-### 4. Configure Azure Cost Management Export
+### 4. Configure Azure Cost Management Export (Optional)
 
-Set up automatic billing export to storage:
+A storage account is deployed with your infrastructure. While not required by the CloudPi application, you can optionally use it to store Azure cost exports for billing analysis.
+
+**To set up automatic billing exports:**
 
 1. Go to **Azure Portal** > **Cost Management + Billing**
 2. Select your subscription
@@ -495,6 +497,8 @@ Set up automatic billing export to storage:
    - Container: `billing-exports`
    - Directory: `azure-cost-data`
 6. Click **Create**
+
+> **Note**: The storage account is provisioned for optional customer use. The CloudPi application does not require it.
 
 ### 5. Deploy CloudPi Application
 
@@ -512,13 +516,16 @@ Once the infrastructure is deployed and verified, you're ready to deploy your Cl
 
 **Infrastructure is ready for your application!**
 
-### 6. Working with Azure Key Vault (Optional)
+### 6. Azure Key Vault
 
-A Key Vault is deployed with your infrastructure for secure secret storage. The VM has a **Managed Identity** with access to the Key Vault, so no passwords are needed to retrieve secrets.
+A Key Vault is deployed with your infrastructure for secure secrets management. The VM has a **Managed Identity** with "Key Vault Secrets User" role for passwordless access.
 
-> **Note**: Key Vault integration is optional and depends on your application's needs. The instructions below show basic Key Vault operations. Application-specific integration will vary based on how your application is configured.
+**What's Configured:**
+- Key Vault deployed with soft-delete and purge protection
+- VM managed identity has access to read secrets
+- Health checks verify Key Vault connectivity
 
-#### Get Your Key Vault Information
+**Get Your Key Vault Information:**
 
 ```bash
 # From deployment outputs
@@ -526,116 +533,11 @@ az deployment sub show --name <deployment-name> \
   --query properties.outputs.keyVaultUri.value -o tsv
 
 # Example output: https://kv-cloudpi-prod-bhrlr4.vault.azure.net/
-# Key Vault name: kv-cloudpi-prod-bhrlr4
 ```
 
-#### Store Secrets in Key Vault
+**Secret Management:**
 
-```bash
-# Store a secret (from your local machine or Azure Portal)
-az keyvault secret set \
-  --vault-name kv-<projectName>-<env>-xxxxx \
-  --name mysql-root-password \
-  --value 'YourSecurePassword123!'
-
-# Store other secrets as needed
-az keyvault secret set --vault-name <kv-name> --name api-key --value 'your-api-key'
-az keyvault secret set --vault-name <kv-name> --name db-connection-string --value 'your-connection-string'
-```
-
-#### Retrieve Secrets from the VM
-
-The VM can retrieve secrets using its Managed Identity (no authentication required):
-
-```bash
-# SSH to VM
-ssh -i ~/.ssh/<projectName>_azure azureadmin@<VM_IP>
-
-# Authenticate using Managed Identity
-az login --identity
-
-# Retrieve a secret
-az keyvault secret show \
-  --vault-name kv-<projectName>-<env>-xxxxx \
-  --name mysql-root-password \
-  --query value -o tsv
-
-# Use in a script
-SECRET_VALUE=$(az keyvault secret show --vault-name <kv-name> --name api-key --query value -o tsv)
-```
-
-#### Verify Managed Identity Access
-
-```bash
-# Verify VM can access Key Vault
-az keyvault secret list --vault-name kv-<projectName>-<env>-xxxxx
-
-# Should list all secrets (VM has "Key Vault Secrets User" role)
-```
-
-#### Common Use Cases
-
-- Store database passwords instead of hardcoding in application
-- Store API keys for external services
-- Store SSL/TLS certificates
-- Store encryption keys
-- Store connection strings
-
-> **For application integration**: How you integrate Key Vault with your application depends on your application's language and framework. Consult your application's documentation for specific integration instructions.
-
-### 7. Configure MySQL Backups
-
-Create automated MySQL backup script on the VM:
-
-```bash
-# Create backup script
-sudo tee /usr/local/bin/mysql-backup.sh > /dev/null <<'EOF'
-#!/bin/bash
-set -e
-
-# Configuration
-BACKUP_DIR="/datadisk/backups"
-STORAGE_ACCOUNT="stcloudpiprodapps"
-CONTAINER="mysql-backups"
-DATE=$(date +%Y%m%d-%H%M%S)
-BACKUP_FILE="mysql-backup-${DATE}.sql.gz"
-
-# Get MySQL password from Key Vault
-az login --identity > /dev/null 2>&1
-MYSQL_ROOT_PASSWORD=$(az keyvault secret show \
-  --vault-name kv-cloudpi-prod \
-  --name mysql-root-password \
-  --query value -o tsv)
-
-# Create backup
-echo "Creating MySQL backup..."
-docker exec cloudpi-db mysqldump -u root -p${MYSQL_ROOT_PASSWORD} \
-  --all-databases | gzip > "${BACKUP_DIR}/${BACKUP_FILE}"
-
-# Upload to Azure Storage
-echo "Uploading to Azure Storage..."
-az storage blob upload \
-  --account-name ${STORAGE_ACCOUNT} \
-  --container-name ${CONTAINER} \
-  --name ${BACKUP_FILE} \
-  --file "${BACKUP_DIR}/${BACKUP_FILE}" \
-  --auth-mode login
-
-# Clean up local backups older than 7 days
-find ${BACKUP_DIR} -name "mysql-backup-*.sql.gz" -mtime +7 -delete
-
-echo "Backup completed: ${BACKUP_FILE}"
-EOF
-
-# Make executable
-sudo chmod +x /usr/local/bin/mysql-backup.sh
-
-# Add to crontab (daily at 2 AM)
-(crontab -l 2>/dev/null; echo "0 2 * * * /usr/local/bin/mysql-backup.sh >> /var/log/mysql-backup.log 2>&1") | crontab -
-
-# Test the backup script
-sudo /usr/local/bin/mysql-backup.sh
-```
+Your CloudPi application repository includes a Key Vault setup script that handles all secret configuration and retrieval. Refer to your application documentation for secret management instructions.
 
 ## Validation
 

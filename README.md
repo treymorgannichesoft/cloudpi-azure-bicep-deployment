@@ -64,7 +64,7 @@ CloudPi_01/
 | **Management** | Resource Group | Container for all resources |
 | **Networking** | VNet, Subnet, NSG | Network isolation with auto-assigned IP ranges |
 | **Compute** | Ubuntu 22.04 VM | Application server with Docker pre-installed |
-| **Storage** | Storage Account | Billing exports, MySQL backups, app data |
+| **Storage** | Storage Account | Optional: Azure cost exports for billing analysis |
 | **Security** | Key Vault, Managed Identity | Secrets management and passwordless auth |
 | **Monitoring** | Log Analytics, Alerts | Centralized logging and performance metrics |
 | **Backup** | Recovery Services Vault | Daily VM backups (configurable) |
@@ -348,12 +348,10 @@ After successful deployment:
 2. **Connect to VM** - Use private IP via VPN/ExpressRoute, Azure Bastion, or temporary public IP (if added during interactive deployment)
 3. **Verify Docker** - Docker and Docker Compose pre-installed via cloud-init with data-root on `/datadisk/docker`
 4. **Verify Data Disk Mount** - Confirm `/datadisk` is mounted with systemd mount unit enabled (`datadisk.mount`)
-5. **Configure Cost Export** - Set up Azure Cost Management export to storage
-6. **Deploy Application** - Deploy your application using Docker Compose
-7. **(Optional) Store Secrets in Key Vault** - Use Key Vault for sensitive configuration
-8. **Configure Backups** - Set up application backup scripts as needed
-9. **Test Monitoring** - Verify metrics and logs in Log Analytics
-10. **(Optional) Configure Auto-Shutdown** - Set shutdown schedule for dev/test environments to save costs (pre-configured if selected during interactive deployment)
+5. **Deploy Application** - Clone your CloudPi application repository and follow deployment instructions
+6. **(Optional) Configure Cost Export** - Set up Azure Cost Management export to storage account for billing analysis
+7. **Test Monitoring** - Verify metrics and logs in Log Analytics
+8. **(Optional) Configure Auto-Shutdown** - Set shutdown schedule for dev/test environments to save costs (pre-configured if selected during interactive deployment)
 
 **Health Check Logs Available:**
 - `/var/log/cloudpi-deployment-health.log` - Complete validation results
