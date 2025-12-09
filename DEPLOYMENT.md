@@ -382,9 +382,69 @@ az network nic ip-config update \
   --public-ip-address pip-${VM_NAME}-temp
 ```
 
-### 3. Verify VM Setup
+### 3. Review Automatic Health Check Results
 
-Once connected to the VM:
+**If you used the interactive deployment script (`./deploy-interactive.sh`):**
+
+The health check results are automatically displayed in your terminal after deployment completes. The script:
+- Waits for cloud-init to finish (3-5 minutes)
+- SSHs to the VM and retrieves health check results
+- Displays all 10 validation checks
+
+**For manual deployments or to re-check:**
+
+```bash
+# SSH to the VM
+ssh -i ~/.ssh/cloudpi_azure azureadmin@$VM_IP
+
+# View health check results
+cat /var/log/cloudpi-deployment-health.log
+```
+
+Expected output:
+```
+========================================
+CloudPi Deployment Health Check
+========================================
+[1/10] Checking Docker installation...
+  ✅ Docker installed: Docker version 29.1.2
+[2/10] Checking Docker service...
+  ✅ Docker service is running
+[3/10] Checking Docker data-root...
+  ✅ Docker using data disk: /datadisk/docker
+[4/10] Checking data disk mount...
+  ✅ Data disk mounted: 126G total, 120G available
+[5/10] Checking systemd mount unit...
+  ✅ systemd mount unit enabled (will auto-mount on reboot)
+[6/10] Checking Azure CLI...
+  ✅ Azure CLI installed
+[7/10] Checking CloudPi directories...
+  ✅ /datadisk/mysql exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/app exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/logs exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/backups exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/docker exists (owner: root:root)
+[8/10] Checking managed identity...
+  ✅ Managed identity authentication successful
+[9/10] Checking Key Vault access...
+  ✅ Key Vault accessible: kv-cloudpit19-dev-mfcrmz
+[10/10] Checking disk space...
+  ✅ Data disk usage: 1%
+
+========================================
+✅ ALL CHECKS PASSED - Deployment Successful!
+
+Your CloudPi VM is ready to use.
+========================================
+```
+
+**Additional health check logs:**
+- `/var/log/cloudpi-disk-setup.log` - Data disk setup details
+- `/var/log/cloud-init-output.log` - Full cloud-init execution log
+
+### 4. Verify VM Setup (Manual Verification)
+
+Once connected to the VM, you can manually verify the setup:
 
 ```bash
 # Check Docker installation
@@ -394,20 +454,30 @@ docker compose version
 # Verify Docker is running
 sudo systemctl status docker
 
-# Check data disk is mounted
-df -h | grep cloudpi-data
+# Check data disk is mounted at /datadisk
+df -h | grep datadisk
+# Should show: /dev/sdc1  126G  224K  120G   1% /datadisk
+
+# Verify systemd mount unit
+systemctl status datadisk.mount
+# Should show: active (mounted)
+
+# Verify Docker using data disk
+docker info | grep "Docker Root Dir"
+# Should show: /datadisk/docker
 
 # View directory structure
-ls -la /mnt/cloudpi-data/
+ls -la /datadisk/
 ```
 
 Expected output:
 ```
-/mnt/cloudpi-data/
+/datadisk/
 ├── mysql/      # MySQL data directory
 ├── app/        # Application data
 ├── logs/       # Application logs
-└── backups/    # Local backup staging
+├── backups/    # Local backup staging
+└── docker/     # Docker data-root
 ```
 
 ### 4. Configure Azure Cost Management Export
@@ -428,58 +498,19 @@ Set up automatic billing export to storage:
 
 ### 5. Deploy CloudPi Application
 
-SSH into the VM and create your Docker Compose configuration:
+Once the infrastructure is deployed and verified, you're ready to deploy your CloudPi application.
 
-```bash
-# Create docker-compose.yml
-cat > /mnt/cloudpi-data/docker-compose.yml <<'EOF'
-version: '3.8'
+**Next Steps:**
+1. Clone your CloudPi application repository (contains docker-compose.yml and application code)
+2. Follow the application-specific deployment instructions in that repository
+3. The infrastructure provides:
+   - Docker and Docker Compose pre-installed
+   - Data disk mounted at `/datadisk` with subdirectories: `mysql/`, `app/`, `logs/`, `backups/`, `docker/`
+   - Proper permissions for your admin user
+   - Key Vault for secrets management (accessible via managed identity)
+   - Storage account for backups and data
 
-services:
-  cloudpi-db:
-    image: mysql:8.0
-    container_name: cloudpi-db
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: cloudpi
-    volumes:
-      - /mnt/cloudpi-data/mysql:/var/lib/mysql
-    ports:
-      - "127.0.0.1:3306:3306"
-    networks:
-      - cloudpi-network
-
-  cloudpi-app:
-    image: your-registry/cloudpi-app:latest
-    container_name: cloudpi-app
-    restart: unless-stopped
-    depends_on:
-      - cloudpi-db
-    environment:
-      - NODE_ENV=production
-      - DB_HOST=cloudpi-db
-    volumes:
-      - /mnt/cloudpi-data/app:/app/data
-      - /mnt/cloudpi-data/logs:/app/logs
-    ports:
-      - "443:443"
-      - "80:80"
-    networks:
-      - cloudpi-network
-
-networks:
-  cloudpi-network:
-    driver: bridge
-EOF
-
-# Start containers
-cd /mnt/cloudpi-data
-docker compose up -d
-
-# Verify containers are running
-docker compose ps
-```
+**Infrastructure is ready for your application!**
 
 ### 6. Working with Azure Key Vault (Optional)
 
@@ -563,7 +594,7 @@ sudo tee /usr/local/bin/mysql-backup.sh > /dev/null <<'EOF'
 set -e
 
 # Configuration
-BACKUP_DIR="/mnt/cloudpi-data/backups"
+BACKUP_DIR="/datadisk/backups"
 STORAGE_ACCOUNT="stcloudpiprodapps"
 CONTAINER="mysql-backups"
 DATE=$(date +%Y%m%d-%H%M%S)
@@ -769,10 +800,16 @@ sudo sh get-docker.sh
 # Check disk status
 lsblk
 
-# Mount manually if needed
+# Check systemd mount unit status
+systemctl status datadisk.mount
+
+# Mount manually if needed (if filesystem exists)
+sudo mount /dev/sdc /datadisk
+
+# Or create filesystem if needed (WARNING: destroys existing data)
 sudo mkfs.ext4 /dev/sdc
-sudo mkdir -p /mnt/cloudpi-data
-sudo mount /dev/sdc /mnt/cloudpi-data
+sudo mkdir -p /datadisk
+sudo mount /dev/sdc /datadisk
 ```
 
 ### Managed Identity Issues
