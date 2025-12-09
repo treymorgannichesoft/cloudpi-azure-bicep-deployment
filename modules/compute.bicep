@@ -432,7 +432,6 @@ runcmd:
         echo "✅ ALL CHECKS PASSED - Deployment Successful!"
         echo ""
         echo "Your CloudPi VM is ready to use."
-        echo "You can now run: docker compose up -d"
       else
         echo "❌ DEPLOYMENT ISSUES DETECTED: $ERRORS error(s) found"
         echo ""

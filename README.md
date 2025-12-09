@@ -16,12 +16,21 @@ az login
 ./deploy-interactive.sh
 ```
 
-The interactive script will:
-- Auto-detect your Azure subscription and tenant
-- Guide you through project naming and environment selection (dev/test/prod)
-- Configure network settings and deployment options
-- **Optional**: Add a temporary public IP for testing (with warnings)
-- Deploy in ~10-15 minutes
+The interactive script will guide you through 8 steps:
+1. **Azure Login Verification** - Auto-detects your subscription and tenant
+2. **Project Name** - Short name for resource naming (3-10 characters)
+3. **Environment Selection** - Choose dev/test/prod with pre-configured settings
+4. **Auto-Shutdown** - Optional scheduled shutdown for dev/test cost savings
+5. **Network Configuration** - Option to add temporary public IP for testing
+6. **Azure Region** - Select deployment region
+7. **SSH Key** - Auto-generates if not found
+8. **Deployment Summary** - Review and confirm before deployment
+
+**After deployment (~10-15 minutes), the script automatically:**
+- Waits for cloud-init to complete (3-5 minutes)
+- Runs 10 comprehensive health checks
+- Displays validation results in your terminal
+- Provides SSH connection details
 
 For detailed instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -141,19 +150,26 @@ autoShutdownNotificationEmail: 'admin@example.com'  // Optional email notificati
 
 ### Cloud-Init Health Checks
 
-All VMs include comprehensive post-deployment validation:
+All VMs include comprehensive post-deployment validation that runs automatically during provisioning.
 
 **Automated Checks (10 validations):**
 1. Docker installation and version
 2. Docker service status
-3. Docker data-root configuration on data disk
-4. Data disk mount at `/mnt/cloudpi-data`
-5. Systemd mount unit enabled for boot persistence
+3. Docker data-root configuration on data disk (`/datadisk/docker`)
+4. Data disk mount at `/datadisk` (126GB persistent storage)
+5. Systemd mount unit enabled for boot persistence (`datadisk.mount`)
 6. Azure CLI installation
-7. CloudPi directory structure and permissions
+7. CloudPi directory structure and permissions at `/datadisk`
 8. Managed identity authentication
-9. Key Vault access verification
+9. Key Vault access verification with actual vault name
 10. Disk space usage monitoring
+
+**Interactive Deployment Display:**
+When using `./deploy-interactive.sh`, the script automatically:
+- Waits for cloud-init to complete
+- SSHs to the VM and retrieves health check results
+- Displays all 10 validation checks in your terminal
+- Shows ✅ for passed checks and ❌ for failures
 
 **Log Files:**
 - `/var/log/cloudpi-deployment-health.log` - Complete health check results
@@ -162,28 +178,63 @@ All VMs include comprehensive post-deployment validation:
 
 **Health Check Output Example:**
 ```
+========================================
+CloudPi Deployment Health Check
+========================================
+[1/10] Checking Docker installation...
+  ✅ Docker installed: Docker version 29.1.2
+[2/10] Checking Docker service...
+  ✅ Docker service is running
+[3/10] Checking Docker data-root...
+  ✅ Docker using data disk: /datadisk/docker
+[4/10] Checking data disk mount...
+  ✅ Data disk mounted: 126G total, 120G available
+[5/10] Checking systemd mount unit...
+  ✅ systemd mount unit enabled (will auto-mount on reboot)
+[6/10] Checking Azure CLI...
+  ✅ Azure CLI installed
+[7/10] Checking CloudPi directories...
+  ✅ /datadisk/mysql exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/app exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/logs exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/backups exists (owner: azureadmin:azureadmin)
+  ✅ /datadisk/docker exists (owner: root:root)
+[8/10] Checking managed identity...
+  ✅ Managed identity authentication successful
+[9/10] Checking Key Vault access...
+  ✅ Key Vault accessible: kv-cloudpit19-dev-mfcrmz
+[10/10] Checking disk space...
+  ✅ Data disk usage: 1%
+
+========================================
 ✅ ALL CHECKS PASSED - Deployment Successful!
+
 Your CloudPi VM is ready to use.
 You can now run: docker compose up -d
+========================================
 ```
 
 ### Data Disk Management
 
-The template automatically configures persistent data disk mounting:
+The template automatically configures persistent data disk mounting at `/datadisk`:
 
 **Features:**
-- UUID-based systemd mount units (survives disk reattachment)
-- Automatic filesystem detection and reuse on redeployment
-- Safety checks prevent accidental OS disk formatting
-- Docker data-root configured on data disk (`/mnt/cloudpi-data/docker`)
-- Pre-created directory structure: `mysql/`, `app/`, `logs/`, `backups/`, `docker/`
-- Proper ownership and permissions for admin user
+- **Industry-standard mount point:** `/datadisk` (Azure recommended practice)
+- **UUID-based systemd mount units** (survives disk reattachment and device name changes)
+- **Automatic filesystem detection** and reuse on redeployment
+- **Safety checks** prevent accidental OS disk formatting
+- **Docker data-root** configured on data disk (`/datadisk/docker`)
+- **Pre-created directory structure** at `/datadisk`: `mysql/`, `app/`, `logs/`, `backups/`, `docker/`
+- **Proper ownership** and permissions for admin user
+- **Independent of ephemeral disk** - No conflicts with Azure's `/mnt` ephemeral storage
 
 **Benefits:**
 - Data persists across VM deletions/recreations
-- Systemd ensures automatic mounting on boot
+- Systemd ensures reliable automatic mounting on boot
+- No systemd ordering conflicts with Azure's ephemeral disk
 - Docker storage separated from OS disk for performance
 - Comprehensive logging for troubleshooting
+- Boot persistence guaranteed (no dependency cycles)
 
 ## Key Features
 
@@ -278,7 +329,7 @@ az deployment sub create \
 - Daily automated backups (configurable)
 - Premium SSD for performance
 - Lifecycle policies for cost optimization
-- Data disk auto-mounted at `/mnt/cloudpi-data`
+- Data disk auto-mounted at `/datadisk` with systemd for boot persistence
 
 ### Monitoring
 - Azure Monitor Agent for metrics and logs
@@ -293,16 +344,21 @@ az deployment sub create \
 
 After successful deployment:
 
-1. **Connect to VM** - Use private IP via VPN/ExpressRoute, Azure Bastion, or temporary public IP (if added during interactive deployment)
-2. **Review Health Check Logs** - Check `/var/log/cloudpi-deployment-health.log` for deployment validation results
-3. **Verify Docker** - Docker and Docker Compose pre-installed via cloud-init with data-root on data disk
-4. **Verify Data Disk Mount** - Confirm `/mnt/cloudpi-data` is mounted with systemd mount unit enabled
+1. **Review Health Check Results** - Interactive deployment automatically displays validation results in your terminal
+2. **Connect to VM** - Use private IP via VPN/ExpressRoute, Azure Bastion, or temporary public IP (if added during interactive deployment)
+3. **Verify Docker** - Docker and Docker Compose pre-installed via cloud-init with data-root on `/datadisk/docker`
+4. **Verify Data Disk Mount** - Confirm `/datadisk` is mounted with systemd mount unit enabled (`datadisk.mount`)
 5. **Configure Cost Export** - Set up Azure Cost Management export to storage
 6. **Deploy Application** - Deploy your application using Docker Compose
 7. **(Optional) Store Secrets in Key Vault** - Use Key Vault for sensitive configuration
 8. **Configure Backups** - Set up application backup scripts as needed
 9. **Test Monitoring** - Verify metrics and logs in Log Analytics
-10. **(Optional) Configure Auto-Shutdown** - Set shutdown schedule for dev/test environments to save costs
+10. **(Optional) Configure Auto-Shutdown** - Set shutdown schedule for dev/test environments to save costs (pre-configured if selected during interactive deployment)
+
+**Health Check Logs Available:**
+- `/var/log/cloudpi-deployment-health.log` - Complete validation results
+- `/var/log/cloudpi-disk-setup.log` - Data disk setup details
+- `/var/log/cloud-init-output.log` - Full provisioning log
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed post-deployment steps.
 
@@ -378,6 +434,10 @@ az monitor activity-log list --resource-group rg-cloudpi-prod
 
 ### VM Health Verification
 
+**Interactive Deployment:**
+If you used `./deploy-interactive.sh`, health check results are automatically displayed in your terminal after deployment.
+
+**Manual Verification:**
 After deployment, SSH to your VM and verify the health checks:
 
 ```bash
@@ -385,18 +445,21 @@ After deployment, SSH to your VM and verify the health checks:
 cat /var/log/cloudpi-deployment-health.log
 
 # Check data disk mount
-df -h /mnt/cloudpi-data
-systemctl status mnt-cloudpi\\x2ddata.mount
+df -h /datadisk
+systemctl status datadisk.mount
 
 # Verify Docker configuration
 docker info | grep "Docker Root Dir"
-# Should show: /mnt/cloudpi-data/docker
+# Should show: /datadisk/docker
 
 # Check cloud-init completion
 cloud-init status
 
 # View full cloud-init logs
 cat /var/log/cloud-init-output.log
+
+# Verify no systemd ordering conflicts
+systemctl list-dependencies datadisk.mount
 ```
 
 ### Common Issues
@@ -404,17 +467,30 @@ cat /var/log/cloud-init-output.log
 **Data disk not mounted:**
 ```bash
 # Check systemd mount unit
-systemctl status mnt-cloudpi\\x2ddata.mount
-journalctl -u mnt-cloudpi\\x2ddata.mount
+systemctl status datadisk.mount
+journalctl -u datadisk.mount
 
 # Review disk setup logs
 cat /var/log/cloudpi-disk-setup.log
+
+# Verify mount point exists
+ls -la /datadisk
+
+# Check for systemd ordering issues
+systemctl list-dependencies datadisk.mount
 ```
 
 **Docker not using data disk:**
 ```bash
 # Verify Docker daemon configuration
 cat /etc/docker/daemon.json
+# Should show: "data-root": "/datadisk/docker"
+
+# Check Docker Root Dir
+docker info | grep "Docker Root Dir"
+# Should show: /datadisk/docker
+
+# Restart Docker if needed
 systemctl restart docker
 ```
 
